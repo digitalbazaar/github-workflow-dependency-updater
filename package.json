@@ -1,0 +1,29 @@
+{
+  "name": "github-workflow-dependency-updater",
+  "version": "1.0.0",
+  "description": "Update all `uses` values with latest SHAs and tag names in the comments.",
+  "keywords": [
+    "github",
+    "workflows",
+    "dependencies",
+    "updates"
+  ],
+  "homepage": "https://github.com/digitalbazaar/github-workflow-dependency-updater#readme",
+  "bugs": {
+    "url": "https://github.com/digitalbazaar/github-workflow-dependency-updater/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/digitalbazaar/github-workflow-dependency-updater.git"
+  },
+  "license": "BSD-3-Clause",
+  "author": "Digital Bazaar, Inc.",
+  "type": "module",
+  "main": "index.js",
+  "bin": {
+    "update-workflow-dependencies": "./index.js"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  }
+}

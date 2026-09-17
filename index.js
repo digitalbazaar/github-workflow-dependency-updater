@@ -12,7 +12,10 @@
  * the GitHub API and replacing the version in the workflow file with the SHA.
  *
  * Usage:
- *   node index.js
+ *   node index.js [file|dir ...]
+ *
+ * Each argument may be a workflow file or a directory of workflow files. With
+ * no arguments, `.github/workflows/` in the current working directory is used.
  *
  * Note: This script assumes that the `uses` field in the workflow files follows
  * the format `owner/repo@version` and that the version can be replaced with a
@@ -22,7 +25,41 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-const WORKFLOWS_DIR = path.join(process.cwd(), '.github', 'workflows');
+const DEFAULT_WORKFLOWS_DIR = path.join('.github', 'workflows');
+const WORKFLOW_EXTENSIONS = ['.yaml', '.yml'];
+const usesRegex = () => /uses:\s*['"]?([^'"\s]+)['"]?(?:\s*#.*)?/g;
+
+function usage() {
+  console.log(`Usage: update-workflow-dependencies [file|dir ...]
+
+Update the \`uses\` values in GitHub workflow files to the latest tag SHAs.
+
+Each argument may be a workflow file or a directory of workflow files. With no
+arguments, ${DEFAULT_WORKFLOWS_DIR}/ in the current working directory is used.`);
+}
+
+function collectWorkflowFiles(targets) {
+  const workflowFiles = new Set();
+  for (const target of targets) {
+    let stats;
+    try {
+      stats = fs.statSync(target);
+    } catch {
+      throw new Error(`Workflow path not found: ${target}`);
+    }
+    if (stats.isDirectory()) {
+      const files = fs.readdirSync(target)
+        .filter(file => WORKFLOW_EXTENSIONS.includes(path.extname(file)))
+        .sort();
+      for (const file of files) {
+        workflowFiles.add(path.join(target, file));
+      }
+    } else {
+      workflowFiles.add(target);
+    }
+  }
+  return [...workflowFiles];
+}
 
 async function getLatestSHA(owner, repo) {
   try {
@@ -37,11 +74,11 @@ async function getLatestSHA(owner, repo) {
 
 async function updateWorkflowFile(filePath, actionToLatest) {
   const content = fs.readFileSync(filePath, 'utf-8');
-  const usesRegex = /uses:\s*['"]?([^'"\s]+)['"]?(?:\s*#.*)?/g;
   let match;
   let updatedContent = content;
 
-  while ((match = usesRegex.exec(content)) !== null) {
+  const regex = usesRegex();
+  while ((match = regex.exec(content)) !== null) {
     const [fullMatch, action] = match;
     const [ownerRepo, version] = action.split('@');
     const latest = actionToLatest.get(ownerRepo);
@@ -56,16 +93,22 @@ async function updateWorkflowFile(filePath, actionToLatest) {
 }
 
 async function main() {
-  const workflowFiles = fs.readdirSync(WORKFLOWS_DIR).filter(file => file.endsWith('.yaml') || file.endsWith('.yml'));
+  const args = process.argv.slice(2);
+  if (args.includes('-h') || args.includes('--help')) {
+    usage();
+    return;
+  }
+
+  const targets = args.length > 0 ? args : [DEFAULT_WORKFLOWS_DIR];
+  const workflowFiles = collectWorkflowFiles(targets);
 
   // Collect all unique actions
   const actionsSet = new Set();
-  for (const file of workflowFiles) {
-    const filePath = path.join(WORKFLOWS_DIR, file);
+  for (const filePath of workflowFiles) {
     const content = fs.readFileSync(filePath, 'utf-8');
-    const usesRegex = /uses:\s*['"]?([^'"\s]+)['"]?(?:\s*#.*)?/g;
     let match;
-    while ((match = usesRegex.exec(content)) !== null) {
+    const regex = usesRegex();
+    while ((match = regex.exec(content)) !== null) {
       const action = match[1].split('@')[0];
       actionsSet.add(action);
     }
@@ -85,13 +128,13 @@ async function main() {
   }
 
   // Update each file
-  for (const file of workflowFiles) {
-    const filePath = path.join(WORKFLOWS_DIR, file);
+  for (const filePath of workflowFiles) {
     console.log(`Processing workflow file: ${filePath}`);
     await updateWorkflowFile(filePath, actionToLatest);
   }
 }
 
 main().catch(error => {
-  console.error('Error updating workflow files:', error);
+  console.error('Error updating workflow files:', error.message);
+  process.exitCode = 1;
 });

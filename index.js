@@ -27,7 +27,10 @@ import path from 'node:path';
 
 const DEFAULT_WORKFLOWS_DIR = path.join('.github', 'workflows');
 const WORKFLOW_EXTENSIONS = ['.yaml', '.yml'];
-const usesRegex = () => /uses:\s*['"]?([^'"\s]+)['"]?(?:\s*#.*)?/g;
+// Matches a `uses:` value, with optional quotes and an optional trailing
+// comment. `[^\S\n]` is used instead of `\s` so a match can never span lines.
+const usesRegex = () =>
+  /(?<![\w-])(uses:[^\S\n]*)(['"]?)([^'"\s]+)\2([^\S\n]*#[^\n]*)?/g;
 
 function usage() {
   console.log(`Usage: update-workflow-dependencies [file|dir ...]
@@ -61,6 +64,14 @@ function collectWorkflowFiles(targets) {
   return [...workflowFiles];
 }
 
+// Local (`./path`) and container (`docker://...`) actions have no GitHub tags
+// to look up.
+function isRemoteAction(action) {
+  const [owner, repo] = action.split('/');
+  return Boolean(owner && repo) &&
+    !action.startsWith('.') && !action.includes('://');
+}
+
 async function getLatestSHA(owner, repo) {
   try {
     const response = await fetch(`https://api.github.com/repos/${owner}/${repo}/tags?per_page=1`);
@@ -72,24 +83,26 @@ async function getLatestSHA(owner, repo) {
   }
 }
 
-async function updateWorkflowFile(filePath, actionToLatest) {
+function updateWorkflowFile(filePath, actionToLatest) {
   const content = fs.readFileSync(filePath, 'utf-8');
-  let match;
-  let updatedContent = content;
 
-  const regex = usesRegex();
-  while ((match = regex.exec(content)) !== null) {
-    const [fullMatch, action] = match;
-    const [ownerRepo, version] = action.split('@');
-    const latest = actionToLatest.get(ownerRepo);
-    if (latest) {
+  // Replace in a single pass so that only the matched text changes; the
+  // surrounding indentation, quoting and following lines are left alone.
+  const updatedContent = content.replace(
+    usesRegex(), (fullMatch, prefix, quote, action) => {
+      const [ownerRepo] = action.split('@');
+      const latest = actionToLatest.get(ownerRepo);
+      if (!latest) {
+        return fullMatch;
+      }
       const newAction = `${ownerRepo}@${latest.sha} # ${latest.version}`;
-      updatedContent = updatedContent.replace(fullMatch, `uses: ${newAction}`);
       console.log(`Updated ${action} to ${newAction} in ${filePath}`);
-    }
-  }
+      return `${prefix}${quote}${ownerRepo}@${latest.sha}${quote} # ${latest.version}`;
+    });
 
-  fs.writeFileSync(filePath, updatedContent, 'utf-8');
+  if (updatedContent !== content) {
+    fs.writeFileSync(filePath, updatedContent, 'utf-8');
+  }
 }
 
 async function main() {
@@ -109,7 +122,7 @@ async function main() {
     let match;
     const regex = usesRegex();
     while ((match = regex.exec(content)) !== null) {
-      const action = match[1].split('@')[0];
+      const action = match[3].split('@')[0];
       actionsSet.add(action);
     }
   }
@@ -117,20 +130,21 @@ async function main() {
   // Fetch latest for each unique action
   const actionToLatest = new Map();
   for (const action of actionsSet) {
+    if (!isRemoteAction(action)) {
+      continue;
+    }
     const [owner, repo] = action.split('/');
-    if (owner && repo) {
-      console.log(`Fetching latest for ${action}`);
-      const latest = await getLatestSHA(owner, repo);
-      if (latest) {
-        actionToLatest.set(action, latest);
-      }
+    console.log(`Fetching latest for ${action}`);
+    const latest = await getLatestSHA(owner, repo);
+    if (latest) {
+      actionToLatest.set(action, latest);
     }
   }
 
   // Update each file
   for (const filePath of workflowFiles) {
     console.log(`Processing workflow file: ${filePath}`);
-    await updateWorkflowFile(filePath, actionToLatest);
+    updateWorkflowFile(filePath, actionToLatest);
   }
 }
 

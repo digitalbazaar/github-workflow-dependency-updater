@@ -93,20 +93,40 @@ async function getLatestSHA(owner, repo) {
 function updateWorkflowFile(filePath, actionToLatest, {dryRun = false} = {}) {
   const content = fs.readFileSync(filePath, 'utf-8');
 
+  // Matches arrive in order, so line numbers are found by counting newlines
+  // incrementally from the previous match rather than from the file start.
+  let line = 1;
+  let scanned = 0;
+  const lineAt = offset => {
+    for (let i = scanned; i < offset; ++i) {
+      if (content[i] === '\n') {
+        ++line;
+      }
+    }
+    scanned = offset;
+    return line;
+  };
+
   // Replace in a single pass so that only the matched text changes; the
   // surrounding indentation, quoting and following lines are left alone.
   const updatedContent = content.replace(
-    usesRegex(), (fullMatch, prefix, quote, action) => {
+    usesRegex(), (fullMatch, prefix, quote, action, comment, offset) => {
       const [ownerRepo] = action.split('@');
       const latest = actionToLatest.get(ownerRepo);
       if (!latest) {
         return fullMatch;
       }
+      const replacement =
+        `${prefix}${quote}${ownerRepo}@${latest.sha}${quote} ` +
+        `# ${latest.version}`;
+      if (replacement === fullMatch) {
+        return fullMatch;
+      }
       const newAction = `${ownerRepo}@${latest.sha} # ${latest.version}`;
       console.log(
-        `${dryRun ? 'Would update' : 'Updated'} ${action} to ${newAction} ` +
-        `in ${filePath}`);
-      return `${prefix}${quote}${ownerRepo}@${latest.sha}${quote} # ${latest.version}`;
+        `${filePath}:${lineAt(offset)}: ` +
+        `${dryRun ? 'Would update' : 'Updated'} "${action}" to "${newAction}"`);
+      return replacement;
     });
 
   if (updatedContent !== content && !dryRun) {

@@ -29,6 +29,13 @@ $ update-workflow-dependencies .github/workflows/main.yml
 $ update-workflow-dependencies ../other-project/.github/workflows main.yml
 ```
 
+Use `-n` or `--dry-run` to report the changes that would be made without
+writing any files.
+
+```sh
+$ update-workflow-dependencies --dry-run
+```
+
 ## License
 
 [BSD-3-Clause](LICENSE) Copyright 2026 Digital Bazaar, Inc.

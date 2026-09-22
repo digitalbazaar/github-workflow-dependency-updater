@@ -12,10 +12,12 @@
  * the GitHub API and replacing the version in the workflow file with the SHA.
  *
  * Usage:
- *   node index.js [file|dir ...]
+ *   node index.js [-n|--dry-run] [file|dir ...]
  *
  * Each argument may be a workflow file or a directory of workflow files. With
  * no arguments, `.github/workflows/` in the current working directory is used.
+ * With `-n` or `--dry-run`, the changes that would be made are reported but no
+ * files are written.
  *
  * Note: This script assumes that the `uses` field in the workflow files follows
  * the format `owner/repo@version` and that the version can be replaced with a
@@ -24,6 +26,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import {parseArgs} from 'node:util';
 
 const DEFAULT_WORKFLOWS_DIR = path.join('.github', 'workflows');
 const WORKFLOW_EXTENSIONS = ['.yaml', '.yml'];
@@ -33,12 +36,16 @@ const usesRegex = () =>
   /(?<![\w-])(uses:[^\S\n]*)(['"]?)([^'"\s]+)\2([^\S\n]*#[^\n]*)?/g;
 
 function usage() {
-  console.log(`Usage: update-workflow-dependencies [file|dir ...]
+  console.log(`Usage: update-workflow-dependencies [options] [file|dir ...]
 
 Update the \`uses\` values in GitHub workflow files to the latest tag SHAs.
 
 Each argument may be a workflow file or a directory of workflow files. With no
-arguments, ${DEFAULT_WORKFLOWS_DIR}/ in the current working directory is used.`);
+arguments, ${DEFAULT_WORKFLOWS_DIR}/ in the current working directory is used.
+
+Options:
+  -n, --dry-run  Report what would be changed without writing any files.
+  -h, --help     Show this help.`);
 }
 
 function collectWorkflowFiles(targets) {
@@ -83,7 +90,7 @@ async function getLatestSHA(owner, repo) {
   }
 }
 
-function updateWorkflowFile(filePath, actionToLatest) {
+function updateWorkflowFile(filePath, actionToLatest, {dryRun = false} = {}) {
   const content = fs.readFileSync(filePath, 'utf-8');
 
   // Replace in a single pass so that only the matched text changes; the
@@ -96,23 +103,42 @@ function updateWorkflowFile(filePath, actionToLatest) {
         return fullMatch;
       }
       const newAction = `${ownerRepo}@${latest.sha} # ${latest.version}`;
-      console.log(`Updated ${action} to ${newAction} in ${filePath}`);
+      console.log(
+        `${dryRun ? 'Would update' : 'Updated'} ${action} to ${newAction} ` +
+        `in ${filePath}`);
       return `${prefix}${quote}${ownerRepo}@${latest.sha}${quote} # ${latest.version}`;
     });
 
-  if (updatedContent !== content) {
+  if (updatedContent !== content && !dryRun) {
     fs.writeFileSync(filePath, updatedContent, 'utf-8');
   }
 }
 
 async function main() {
-  const args = process.argv.slice(2);
-  if (args.includes('-h') || args.includes('--help')) {
+  let values;
+  let positionals;
+  try {
+    ({values, positionals} = parseArgs({
+      allowPositionals: true,
+      options: {
+        'dry-run': {type: 'boolean', short: 'n'},
+        help: {type: 'boolean', short: 'h'}
+      }
+    }));
+  } catch (error) {
+    console.error(error.message);
+    usage();
+    process.exitCode = 2;
+    return;
+  }
+  if (values.help) {
     usage();
     return;
   }
+  const dryRun = Boolean(values['dry-run']);
 
-  const targets = args.length > 0 ? args : [DEFAULT_WORKFLOWS_DIR];
+  const targets = positionals.length > 0 ?
+    positionals : [DEFAULT_WORKFLOWS_DIR];
   const workflowFiles = collectWorkflowFiles(targets);
 
   // Collect all unique actions
@@ -144,7 +170,7 @@ async function main() {
   // Update each file
   for (const filePath of workflowFiles) {
     console.log(`Processing workflow file: ${filePath}`);
-    updateWorkflowFile(filePath, actionToLatest);
+    updateWorkflowFile(filePath, actionToLatest, {dryRun});
   }
 }
 
